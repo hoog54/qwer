@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snake Game</title>
+  <style>
+    :root { --bg:#0f1220; --panel:#171a2a; --text:#e7e9ee; --accent:#49e07a; --danger:#ff4d4f; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { margin: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(1200px 600px at 50% 0%, #1c2040 0%, #181c33 60%, #141829 100%); color: var(--text); font-family: system ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif; }
+    .wrap { width: 760px; max-width: 95vw; }
+    .title { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+    .title h1 { margin:0; font-size:20px; font-weight:600; letter-spacing:0.5px; }
+    .hud { display:flex; align-items:center; gap:10px; }
+    .btn { appearance:none; border:1px solid #2a2e44; background:linear-gradient(#20243a, #181a2d); color:var(--text); padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+    .btn:hover { border-color:#3a3f5f; }
+    .btn.accent { border-color:#268e54; background:linear-gradient(#2abd6f, #1f9a5b); color:#07140c; }
+    .btn.danger { border-color:#a73537; background:linear-gradient(#ff6b6d, #d24b4d); color:#230707; }
+    .stats { margin-left:auto; display:flex; gap:14px; font-variant-numeric:tabular-nums; }
+    .board { position:relative; border-radius:12px; overflow:hidden; box-shadow: 0 12px 40px rgba(0,0,0,.45), inset 0 0 0 1px #262a3f; background: url('1764293432456.png') center/cover no-repeat, linear-gradient(#0b0e18, #0f1220); }
+    canvas { display:block; width:100%; height:auto; image-rendering: pixelated; }
+    .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(8,10,18,.55); opacity:0; pointer-events:none; transition:.2s ease; }
+    .overlay.show { opacity:1; pointer-events:auto; }
+    .overlay .panel { background:var(--panel); border:1px solid #2a2e44; border-radius:12px; min-width:60%; max-width:90%; padding:20px; text-align:center; }
+    .panel h2 { margin:0 0 8px; font-size:18px; }
+    .panel p { margin:6px 0; color:#b7bbcc; }
+    .kbd { display:inline-block; border:1px solid #2a2e44; background:#121528; border-radius:6px; padding:2px 6px; font-weight:700; color:#cfd3e6; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">
+      <h1>Snake</h1>
+      <div class="hud">
+        <button class="btn accent" id="start">시작</button>
+        <button class="btn" id="pause">일시정지</button>
+        <button class="btn danger" id="restart">재시작</button>
+        <div class="stats">
+          <div>점수 <span id="score">0</span></div>
+          <div>최고점 <span id="high">0</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="board">
+      <canvas id="game" width="640" height="480"></canvas>
+      <div class="overlay" id="overlay">
+        <div class="panel">
+          <h2 id="state">준비</h2>
+          <p><span class="kbd">←</span> <span class="kbd">→</span> <span class="kbd">↑</span> <span class="kbd">↓</span> 또는 WASD</p>
+          <p><span class="kbd">Space</span> 일시정지/재개 · <span class="kbd">Enter</span> 재시작</p>
+          <p>보너스 아이템을 먹으면 점수 2배 + 피버타임</p>
+          <div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">
+            <button class="btn accent" id="overlayStart">플레이</button>
+            <button class="btn" id="overlayPause">일시정지</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('start');
+    const pauseBtn = document.getElementById('pause');
+    const restartBtn = document.getElementById('restart');
+    const overlay = document.getElementById('overlay');
+    const overlayStart = document.getElementById('overlayStart');
+    const overlayPause = document.getElementById('overlayPause');
+    const stateText = document.getElementById('state');
+    const scoreEl = document.getElementById('score');
+    const highEl = document.getElementById('high');
+
+    const CELL = 20;
+    const COLS = Math.floor(canvas.width / CELL);
+    const ROWS = Math.floor(canvas.height / CELL);
+    const STEP_MS = 100;
+
+    let snake = [];
+    let dir = { x: 1, y: 0 };
+    let nextDir = dir;
+    let foods = [];
+    let grow = 0;
+    let score = 0;
+    let high = Number(localStorage.getItem('snake-high') || 0);
+    let running = false;
+    let paused = true;
+    let last = 0;
+    let acc = 0;
+    let bonus = null;
+    let fever = 0;
+    let feverSpin = 0;
+
+    function rndCell() { return Math.floor(Math.random() * COLS); }
+    function posEq(a,b) { return a.x === b.x && a.y === b.y; }
+    function inSnake(p) { return snake.some(s => posEq(s, p)); }
+
+    function spawnFood() {
+      let p;
+      do { p = { x: rndCell(), y: Math.floor(Math.random() * ROWS) }; } while (inSnake(p) || foods.some(f => posEq(f,p)));
+      foods.push(p);
+    }
+
+    function ensureFoods(n) {
+      while (foods.length < n) spawnFood();
+    }
+
+    function spawnBonus() {
+      let p;
+      do { p = { x: rndCell(), y: Math.floor(Math.random() * ROWS) }; } while (inSnake(p) || foods.some(f => posEq(f,p)));
+      bonus = p;
+    }
+
+    function reset() {
+      score = 0;
+      updateScore();
+      snake = [];
+      const cx = Math.floor(COLS/2);
+      const cy = Math.floor(ROWS/2);
+      for (let i = 3; i >= 0; i--) snake.push({ x: cx - i, y: cy });
+      dir = { x: 1, y: 0 };
+      nextDir = dir;
+      grow = 0;
+      foods = [];
+      spawnFood();
+      bonus = null;
+      fever = 0;
+      feverSpin = 0;
+      paused = true;
+      running = false;
+      acc = 0;
+      last = performance.now();
+      showOverlay('준비');
+      draw();
+    }
+
+    function updateScore() {
+      scoreEl.textContent = String(score);
+      highEl.textContent = String(Math.max(high, score));
+    }
+
+    function setDir(nx, ny) {
+      if (nx === -dir.x && ny === -dir.y) return;
+      nextDir = { x: nx, y: ny };
+    }
+
+    function step() {
+      dir = nextDir;
+      let hx = snake[snake.length - 1].x + dir.x;
+      let hy = snake[snake.length - 1].y + dir.y;
+      if (fever > 0) {
+        if (hx < 0) hx = COLS - 1; else if (hx >= COLS) hx = 0;
+        if (hy < 0) hy = ROWS - 1; else if (hy >= ROWS) hy = 0;
+      }
+      const head = { x: hx, y: hy };
+      if (fever === 0 && (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS)) return gameOver();
+      if (fever === 0 && inSnake(head)) return gameOver();
+      snake.push(head);
+      {
+        const idx = foods.findIndex(f => posEq(head, f));
+        if (idx >= 0) { foods.splice(idx,1); grow += 2; score += (fever > 0 ? 2 : 1); updateScore(); spawnFood(); if (!bonus && Math.random() < 0.35) spawnBonus(); }
+      }
+      if (bonus && posEq(head, bonus)) { bonus = null; score = score * 2; grow += 1; updateScore(); fever = 7000; feverSpin = 0; }
+      if (fever > 0) {
+        const hxpx = head.x*CELL + CELL/2;
+        const hypx = head.y*CELL + CELL/2;
+        const r = CELL*0.8;
+        const R2 = (CELL*0.45)*(CELL*0.45);
+        let eatIdx = -1;
+        for (let i=0;i<3;i++) {
+          const ang = feverSpin + i*(Math.PI*2/3);
+          const ox = hxpx + Math.cos(ang)*r;
+          const oy = hypx + Math.sin(ang)*r;
+          eatIdx = foods.findIndex(f => { const fx = f.x*CELL + CELL/2; const fy = f.y*CELL + CELL/2; const dx = ox - fx, dy = oy - fy; return dx*dx + dy*dy <= R2; });
+          if (eatIdx >= 0) break;
+        }
+        if (eatIdx >= 0) { foods.splice(eatIdx,1); grow += 1; score += (fever > 0 ? 2 : 1); updateScore(); }
+        ensureFoods(20);
+      } else {
+        ensureFoods(1);
+      }
+      if (grow > 0) { grow--; } else { snake.shift(); }
+    }
+
+    function draw() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      
+      ctx.fillStyle = '#49e07a';
+      for (let i = 0; i < snake.length; i++) {
+        const s = snake[i];
+        const gx = s.x * CELL, gy = s.y * CELL;
+        ctx.fillRect(gx+1, gy+1, CELL-2, CELL-2);
+      }
+      const head = snake[snake.length-1];
+      ctx.fillStyle = '#6bf196';
+      ctx.fillRect(head.x*CELL+1, head.y*CELL+1, CELL-2, CELL-2);
+      for (let i=0;i<foods.length;i++) {
+        const f = foods[i];
+        const fx = f.x*CELL + CELL/2;
+        const fy = f.y*CELL + CELL/2;
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.arc(fx, fy, CELL*0.38, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#8b5e3c';
+        ctx.fillRect(fx-2, fy - CELL*0.38 - 3, 4, 6);
+        ctx.fillStyle = '#22c55e';
+        ctx.beginPath();
+        ctx.moveTo(fx+3, fy - CELL*0.38 - 1);
+        ctx.quadraticCurveTo(fx+10, fy - CELL*0.38 - 8, fx+2, fy - CELL*0.38 - 6);
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (bonus) {
+        const bx = bonus.x*CELL;
+        const by = bonus.y*CELL;
+        const m = 2;
+        const w = CELL - m*2;
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(bx+m, by+m, w, w);
+        ctx.fillStyle = '#d97706';
+        ctx.fillRect(bx+m, by+m, w, 4);
+        ctx.strokeStyle = '#b45309';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx+m, by+m, w, w);
+      }
+    if (fever > 0) {
+      const hx = head.x*CELL + CELL/2;
+      const hy = head.y*CELL + CELL/2;
+      const r = CELL*0.8;
+      for (let i=0;i<3;i++) {
+        const ang = feverSpin + i*(Math.PI*2/3);
+        const ox = hx + Math.cos(ang)*r;
+        const oy = hy + Math.sin(ang)*r;
+        ctx.fillStyle = '#f472b6';
+        ctx.beginPath();
+        ctx.arc(ox, oy, 4, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(244,114,182,0.12)';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+    }
+    }
+
+    function loop(t) {
+      if (!running) return;
+      const dt = t - last; last = t;
+      if (!paused) {
+        const prevFever = fever;
+        if (fever > 0) { fever -= dt; if (fever < 0) fever = 0; }
+        if (prevFever > 0 && fever === 0) { foods = []; spawnFood(); }
+        feverSpin += dt * 0.01;
+        acc += dt;
+        const stepMs = fever > 0 ? STEP_MS * 0.6 : STEP_MS;
+        while (acc >= stepMs) { step(); acc -= stepMs; }
+        draw();
+      }
+      requestAnimationFrame(loop);
+    }
+
+    function start() {
+      if (!running) { running = true; paused = false; hideOverlay(); requestAnimationFrame(loop); }
+    }
+
+    function pause() {
+      if (!running) return; paused = true; showOverlay('일시정지');
+    }
+
+    function resume() {
+      if (!running) return; paused = false; hideOverlay();
+    }
+
+    function restart() {
+      const wasHigh = score > high;
+      if (wasHigh) { high = score; localStorage.setItem('snake-high', String(high)); }
+      reset();
+    }
+
+    function gameOver() {
+      running = false; paused = true;
+      const wasHigh = score > high;
+      if (wasHigh) { high = score; localStorage.setItem('snake-high', String(high)); }
+      updateScore();
+      showOverlay(wasHigh ? '게임 종료 · 최고점 갱신!' : '게임 종료');
+    }
+
+    function showOverlay(label) { stateText.textContent = label; overlay.classList.add('show'); }
+    function hideOverlay() { overlay.classList.remove('show'); }
+
+    document.addEventListener('keydown', e => {
+      const k = e.key.toLowerCase();
+      if (k === 'arrowleft' || k === 'a') setDir(-1,0);
+      else if (k === 'arrowright' || k === 'd') setDir(1,0);
+      else if (k === 'arrowup' || k === 'w') setDir(0,-1);
+      else if (k === 'arrowdown' || k === 's') setDir(0,1);
+      else if (k === ' ') { if (!running) start(); else if (paused) resume(); else pause(); }
+      else if (k === 'enter') restart();
+    });
+
+    startBtn.addEventListener('click', () => { if (!running) start(); else resume(); });
+    pauseBtn.addEventListener('click', () => pause());
+    restartBtn.addEventListener('click', () => restart());
+    overlayStart.addEventListener('click', () => { if (!running) start(); else resume(); });
+    overlayPause.addEventListener('click', () => pause());
+
+    reset();
+  </script>
+  </body>
+</html>
